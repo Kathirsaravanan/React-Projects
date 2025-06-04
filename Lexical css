@@ -1,0 +1,21 @@
+.editor-input {
+  min-height: 200px;
+  width: 100%;
+  padding: 10px;
+  font-size: 16px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+
+  /* Responsive content handling */
+  box-sizing: border-box;
+  overflow-x: hidden;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.editor-input img,
+.editor-input table {
+  max-width: 100%;
+  height: auto;
+}
