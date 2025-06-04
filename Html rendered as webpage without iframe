@@ -1,0 +1,39 @@
+import React from 'react';
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import { INSERT_HTML_COMMAND } from 'lexical';
+
+function UploadHtmlFileButton() {
+  const [editor] = useLexicalComposerContext();
+
+  const handleUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const fullHtml = reader.result;
+
+      // Step 1: Parse and extract body content from HTML
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(fullHtml, 'text/html');
+      const bodyHtml = doc.body.innerHTML;
+
+      // Step 2: Insert only the body content
+      editor.dispatchCommand(INSERT_HTML_COMMAND, bodyHtml);
+    };
+
+    reader.readAsText(file);
+  };
+
+  return (
+    <input
+      type="file"
+      accept=".html,.htm"
+      onChange={handleUpload}
+      style={{ marginBottom: '10px' }}
+    />
+  );
+}
+
+export default UploadHtmlFileButton;
