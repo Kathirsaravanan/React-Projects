@@ -1,9 +1,7 @@
-import React from 'react';
-import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { INSERT_HTML_COMMAND } from 'lexical';
+import React, { useState } from 'react';
 
-function UploadHtmlFileButton() {
-  const [editor] = useLexicalComposerContext();
+function HtmlFileViewer() {
+  const [iframeSrc, setIframeSrc] = useState(null);
 
   const handleUpload = (event) => {
     const file = event.target.files?.[0];
@@ -11,22 +9,36 @@ function UploadHtmlFileButton() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      const htmlText = reader.result;
-
-      // Insert HTML into Lexical (it will render as web content)
-      editor.dispatchCommand(INSERT_HTML_COMMAND, htmlText);
+      const blob = new Blob([reader.result], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      setIframeSrc(url);
     };
     reader.readAsText(file);
   };
 
   return (
-    <input
-      type="file"
-      accept=".html,.htm"
-      onChange={handleUpload}
-      style={{ marginTop: '10px' }}
-    />
+    <div style={{ width: '100%' }}>
+      <input
+        type="file"
+        accept=".html,.htm"
+        onChange={handleUpload}
+        style={{ marginBottom: '10px' }}
+      />
+      {iframeSrc && (
+        <iframe
+          src={iframeSrc}
+          title="Uploaded HTML"
+          style={{
+            width: '100%',
+            height: '500px',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            overflow: 'auto'
+          }}
+        />
+      )}
+    </div>
   );
 }
 
-export default UploadHtmlFileButton;
+export default HtmlFileViewer;
