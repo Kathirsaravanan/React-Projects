@@ -1,0 +1,104 @@
+import React, { useRef, useState } from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import {
+  $getRoot,
+  $createParagraphNode,
+  $createTextNode,
+} from "lexical";
+import { Box, Button, Typography } from "@mui/material";
+
+function HtmlFileUploader() {
+  const [editor] = useLexicalComposerContext();
+  const [fileNames, setFileNames] = useState([]);
+  const fileInputRef = useRef();
+
+  const handleFiles = (files) => {
+    const uploadedFileNames = [];
+    Array.from(files).forEach((file) => {
+      if (file.type === "text/html") {
+        uploadedFileNames.push(file.name);
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const htmlString = event.target.result;
+
+          editor.update(() => {
+            const root = $getRoot();
+            // We *append*, not clear
+            const paragraph = $createParagraphNode();
+            paragraph.append($createTextNode(htmlString));
+            root.append(paragraph);
+          });
+        };
+        reader.readAsText(file);
+      }
+    });
+
+    setFileNames((prev) => [...prev, ...uploadedFileNames]);
+  };
+
+  const onFileChange = (e) => {
+    handleFiles(e.target.files);
+    e.target.value = null;
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files?.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  return (
+    <Box sx={{ my: 2 }}>
+      {/* Hidden input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".html"
+        id="upload-html-file"
+        style={{ display: "none" }}
+        onChange={onFileChange}
+      />
+
+      {/* Drag-and-drop + Button */}
+      <Box
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        sx={{
+          p: 2,
+          border: "2px dashed #ccc",
+          borderRadius: 2,
+          textAlign: "center",
+          cursor: "pointer",
+          mb: 1,
+        }}
+        onClick={() => fileInputRef.current.click()}
+      >
+        <Typography variant="body1" sx={{ mb: 1 }}>
+          Drag & drop HTML files here, or click to upload
+        </Typography>
+        <Button variant="contained">Upload HTML Files</Button>
+      </Box>
+
+      {/* Show uploaded file names */}
+      {fileNames.length > 0 && (
+        <Box>
+          <Typography variant="subtitle2">Uploaded Files:</Typography>
+          {fileNames.map((name, idx) => (
+            <Typography key={idx} variant="body2" sx={{ ml: 1 }}>
+              • {name}
+            </Typography>
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+export default HtmlFileUploader;
