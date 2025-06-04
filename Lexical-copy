@@ -1,0 +1,52 @@
+import React from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $getRoot, $createParagraphNode, $createTextNode } from "lexical";
+import { Box, Button } from "@mui/material";
+
+function HtmlFileUploader() {
+  const [editor] = useLexicalComposerContext();
+
+  const onFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      const htmlString = event.target.result;
+
+      editor.update(() => {
+        const root = $getRoot();
+        // root.clear(); // Clear existing content
+
+        const paragraph = $createParagraphNode();
+        const textNode = $createTextNode(htmlString);
+
+        paragraph.append(textNode);
+        root.append(paragraph);
+      });
+    };
+
+    reader.readAsText(file);
+    e.target.value = null;
+  };
+
+  return (
+    <Box sx={{ my: 1 }}>
+      <input
+        type="file"
+        accept=".html"
+        id="upload-html-file"
+        style={{ display: "none" }}
+        onChange={onFileChange}
+      />
+      <label htmlFor="upload-html-file">
+        <Button variant="contained" component="span">
+          Upload HTML File
+        </Button>
+      </label>
+    </Box>
+  );
+}
+
+export default HtmlFileUploader;
