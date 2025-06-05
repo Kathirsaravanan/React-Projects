@@ -1,0 +1,70 @@
+import React from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $getRoot, $isTextNode } from "lexical";
+import { $generateNodesFromDOM } from "@lexical/html";
+
+function applyInlineStylesToNodes(nodes, domElement) {
+  const walk = (lexicalNodes, domNodes) => {
+    for (let i = 0; i < lexicalNodes.length; i++) {
+      const lexicalNode = lexicalNodes[i];
+      const domNode = domNodes[i];
+
+      if (!lexicalNode || !domNode) continue;
+
+      if ($isTextNode(lexicalNode) && domNode.nodeType === 1) {
+        const style = domNode.getAttribute("style");
+        if (style) {
+          lexicalNode.setStyle(style);
+        }
+      }
+
+      // Recursively apply styles to child nodes
+      if (typeof lexicalNode.getChildren === "function" && domNode.childNodes) {
+        walk(lexicalNode.getChildren(), Array.from(domNode.childNodes));
+      }
+    }
+  };
+
+  walk(nodes, Array.from(domElement.childNodes));
+}
+
+function HtmlFileUploader() {
+  const [editor] = useLexicalComposerContext();
+
+  const handleUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      const htmlString = e.target.result;
+
+      const parser = new DOMParser();
+      const dom = parser.parseFromString(htmlString, "text/html");
+      const body = dom.body;
+
+      editor.update(() => {
+        const root = $getRoot();
+        root.clear();
+
+        const lexicalNodes = $generateNodesFromDOM(editor, body);
+
+        // Apply inline styles manually
+        applyInlineStylesToNodes(lexicalNodes, body);
+
+        root.append(...lexicalNodes);
+      });
+    };
+
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="p-4">
+      <input type="file" accept=".html" onChange={handleUpload} />
+    </div>
+  );
+}
+
+export default HtmlFileUploader;
