@@ -1,0 +1,40 @@
+import React from 'react';
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import { $getRoot } from 'lexical';
+import { $generateNodesFromDOM } from '@lexical/html';
+
+export default function UploadHtmlFileButton() {
+  const [editor] = useLexicalComposerContext();
+
+  const handleFileChange = async (event) => {
+    const file = event.target.files[0];
+    if (!file || !file.name.endsWith('.html')) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const htmlContent = e.target.result;
+
+      editor.update(() => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlContent, 'text/html');
+        const nodes = $generateNodesFromDOM(editor, doc.body);
+
+        const root = $getRoot();
+        root.clear(); // Optional: Clear existing content
+        root.append(...nodes);
+      });
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="my-4">
+      <label className="cursor-pointer">
+        <input type="file" accept=".html" onChange={handleFileChange} className="hidden" />
+        <span className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+          Upload HTML File
+        </span>
+      </label>
+    </div>
+  );
+}
