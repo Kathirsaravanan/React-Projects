@@ -1,0 +1,23 @@
+switch (tag) {
+  // existing cases...
+
+  case 'hr':
+    lexicalNode = $createStyledElementNode(style);
+    lexicalNode.append($createTextNode('────────'));
+    break;
+
+  case 'a':
+    lexicalNode = $createStyledElementNode(style, 'a');
+    const href = child.getAttribute('href');
+    if (href) {
+      lexicalNode.__href = href; // optional: store for later use
+    }
+    break;
+
+  default:
+    console.warn('🚫 Unsupported tag ignored:', tag);
+    lexicalNode = $createStyledElementNode(style);
+    lexicalNode.append(
+      $createTextNode(`[Unsupported <${tag}>] ${child.textContent.trim()}`)
+    );
+}
