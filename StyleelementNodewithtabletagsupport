@@ -1,0 +1,98 @@
+export class StyledElementNode extends ElementNode {
+  __style;
+  __tag;
+
+  static getType() {
+    return 'styled-element';
+  }
+
+  static clone(node) {
+    return new StyledElementNode(node.__style, node.__tag, node.__key);
+  }
+
+  constructor(style = '', tag = 'div', key) {
+    super(key);
+    this.__style = style;
+    this.__tag = tag;
+  }
+
+  createDOM(config) {
+    const dom = document.createElement(this.__tag || 'div');
+    if (this.__style) {
+      dom.setAttribute('style', this.__style);
+    }
+    return dom;
+  }
+
+  updateDOM(prevNode, dom) {
+    if (prevNode.__style !== this.__style) {
+      dom.setAttribute('style', this.__style);
+    }
+    return false;
+  }
+
+  exportJSON() {
+    return {
+      ...super.exportJSON(),
+      type: 'styled-element',
+      version: 1,
+      style: this.__style,
+      tag: this.__tag,
+    };
+  }
+
+  static importJSON(json) {
+    return new StyledElementNode(json.style, json.tag || 'div');
+  }
+
+  exportDOM() {
+    const element = document.createElement(this.__tag || 'div');
+    if (this.__style) {
+      element.setAttribute('style', this.__style);
+    }
+    return {
+      element,
+    };
+  }
+
+  static importDOM() {
+    const tags = ['table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'div'];
+    const conversions = {};
+    tags.forEach(tag => {
+      conversions[tag] = (domNode) => {
+        const style = domNode.getAttribute('style') || '';
+        return {
+          conversion: () => new StyledElementNode(style, tag),
+          priority: 1,
+        };
+      };
+    });
+    return conversions;
+  }
+
+  getStyle() {
+    return this.__style;
+  }
+
+  setStyle(style) {
+    const writable = this.getWritable();
+    writable.__style = style;
+  }
+
+  getTag() {
+    return this.__tag;
+  }
+
+  isInline() {
+    return false;
+  }
+}
+
+// Factory
+export function $createStyledElementNode(style = '', tag = 'div') {
+  return new StyledElementNode(style, tag);
+}
+
+export function $isStyledElementNode(node) {
+  return node instanceof StyledElementNode;
+}
