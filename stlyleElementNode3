@@ -1,107 +1,126 @@
-export class StyledElementNode extends ElementNode {
-  __style;
-  __tag;
+import React from 'react'; import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'; import { $createTextNode, $createParagraphNode, $createHeadingNode, $createListNode, $createListItemNode, $getRoot, } from 'lexical'; import { $createStyledElementNode } from './StyledElementNode'; import { $createLinkNode } from '@lexical/link';
 
-  static getType() {
-    return 'styled-element';
-  }
+function HtmlFileUploader() { const [editor] = useLexicalComposerContext();
 
-  static clone(node) {
-    return new StyledElementNode(node.__style, node.__tag, node.__key);
-  }
+const handleFileChange = async (event) => { const file = event.target.files[0]; if (!file) { alert('Please upload a valid HTML or HTM file.'); return; }
 
-  constructor(style = '', tag = 'div', key) {
-    super(key);
-    this.__style = style;
-    this.__tag = tag;
-  }
+const reader = new FileReader();
 
-  createDOM(config) {
-    const dom = document.createElement(this.__tag || 'div');
+reader.onload = (e) => {
+  try {
+    const htmlContent = e.target.result;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlContent, 'text/html');
+    const body = doc.body;
 
-    if (this.__style) {
-      dom.setAttribute('style', this.__style);
+    if (!body) {
+      console.error('❌ Failed to parse HTML body.');
+      return;
     }
 
-    return dom;
-  }
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
 
-  updateDOM(prevNode, dom) {
-    if (prevNode.__style !== this.__style) {
-      dom.setAttribute('style', this.__style);
-    }
-    return false;
-  }
+      const walkDOM = (domNode, lexicalParent) => {
+        for (let child of domNode.childNodes) {
+          if (child.nodeType === 3) {
+            const text = child.textContent.trim();
+            if (text) {
+              const textNode = $createTextNode(text);
+              lexicalParent.append(textNode);
+            }
+          } else if (child.nodeType === 1) {
+            const tag = child.tagName.toLowerCase();
+            const style = child.getAttribute('style') || '';
+            let lexicalNode = null;
 
-  exportJSON() {
-    return {
-      ...super.exportJSON(),
-      type: 'styled-element',
-      version: 1,
-      style: this.__style,
-      tag: this.__tag,
-    };
-  }
+            switch (tag) {
+              case 'p':
+              case 'div':
+                lexicalNode = $createStyledElementNode(style, tag);
+                break;
 
-  static importJSON(json) {
-    return new StyledElementNode(json.style, json.tag || 'div');
-  }
+              case 'h1':
+              case 'h2':
+              case 'h3':
+                lexicalNode = $createHeadingNode(tag);
+                break;
 
-  exportDOM() {
-    const element = document.createElement(this.__tag || 'div');
-    if (this.__style) {
-      element.setAttribute('style', this.__style);
-    }
-    return {
-      element,
-    };
-  }
+              case 'ul':
+              case 'ol':
+                lexicalNode = $createListNode(tag === 'ul' ? 'bullet' : 'number');
+                break;
 
-  static importDOM() {
-    const tags = [
-      'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
-      'div', 'a' // ✅ Add anchor tag here
-    ];
+              case 'li':
+                lexicalNode = $createListItemNode();
+                break;
 
-    const conversions = {};
-    tags.forEach(tag => {
-      conversions[tag] = (domNode) => {
-        const style = domNode.getAttribute('style') || '';
-        const href = domNode.getAttribute('href') || '';
-        const tagWithHref = tag === 'a' ? `<a href="${href}">` : tag;
+              case 'table':
+              case 'thead':
+              case 'tbody':
+              case 'tfoot':
+              case 'tr':
+              case 'th':
+              case 'td':
+                lexicalNode = $createStyledElementNode(style, tag);
+                break;
 
-        return {
-          conversion: () => new StyledElementNode(style, tag),
-          priority: 1,
-        };
+              case 'hr':
+                lexicalNode = $createStyledElementNode(style, 'div');
+                lexicalNode.append($createTextNode('────────'));
+                break;
+
+              case 'a': {
+                const href = child.getAttribute('href');
+                const linkText = child.textContent.trim();
+                if (href && linkText) {
+                  const linkNode = $createLinkNode(href);
+                  linkNode.append($createTextNode(linkText));
+                  lexicalParent.append(linkNode);
+                }
+                continue;
+              }
+
+              default:
+                console.warn('🚫 Unsupported tag ignored:', tag);
+                lexicalNode = $createStyledElementNode(style, tag);
+                lexicalNode.append($createTextNode(`[Unsupported <${tag}>] ${child.textContent}`));
+            }
+
+            if (lexicalNode) {
+              lexicalParent.append(lexicalNode);
+              walkDOM(child, lexicalNode);
+            }
+          }
+        }
       };
+
+      walkDOM(body, root);
+      console.log('✅ HTML rendering complete.');
     });
-    return conversions;
+  } catch (err) {
+    console.error('💥 Error parsing HTML:', err);
+    alert('Error while rendering HTML: ' + err.message);
   }
+};
 
-  getStyle() {
-    return this.__style;
-  }
+reader.onerror = (err) => {
+  console.error('❌ FileReader error:', err);
+  alert('Failed to read HTML file.');
+};
 
-  setStyle(style) {
-    const writable = this.getWritable();
-    writable.__style = style;
-  }
+reader.readAsText(file);
 
-  getTag() {
-    return this.__tag;
-  }
+};
 
-  isInline() {
-    return this.__tag === 'a'; // ✅ Mark anchor tags as inline
-  }
-}
+return ( <div className="my-2"> <label htmlFor="html-upload" className="cursor-pointer bg-blue-600 text-white px-4 py-2 rounded"> Upload HTML/HTM File </label> <input
+id="html-upload"
+type="file"
+accept=".html,.htm"
+onChange={handleFileChange}
+className="hidden"
+/> </div> ); }
 
-// ✅ Factory
-export function $createStyledElementNode(style = '', tag = 'div') {
-  return new StyledElementNode(style, tag);
-}
+export default HtmlFileUploader;
 
-export function $isStyledElementNode(node) {
-  return node instanceof StyledElementNode;
-}
