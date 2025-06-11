@@ -1,0 +1,82 @@
+import { DecoratorNode } from 'lexical';
+
+export class HRNode extends DecoratorNode {
+  __style;
+
+  static getType() {
+    return 'hr';
+  }
+
+  static clone(node) {
+    return new HRNode(node.__style, node.__key);
+  }
+
+  constructor(style = '', key) {
+    super(key);
+    this.__style = style;
+  }
+
+  createDOM() {
+    const dom = document.createElement('hr');
+    if (this.__style) {
+      dom.setAttribute('style', this.__style);
+    }
+    return dom;
+  }
+
+  updateDOM(prevNode, dom) {
+    if (prevNode.__style !== this.__style) {
+      dom.setAttribute('style', this.__style || '');
+    }
+    return false;
+  }
+
+  exportJSON() {
+    return {
+      ...super.exportJSON(),
+      type: 'hr',
+      version: 1,
+      style: this.__style,
+    };
+  }
+
+  static importJSON(json) {
+    return new HRNode(json.style || '');
+  }
+
+  static importDOM() {
+    return {
+      hr: (domNode) => {
+        const style = domNode.getAttribute('style') || '';
+        return {
+          conversion: () => new HRNode(style),
+          priority: 1,
+        };
+      },
+    };
+  }
+
+  exportDOM() {
+    const hr = document.createElement('hr');
+    if (this.__style) {
+      hr.setAttribute('style', this.__style);
+    }
+    return { element: hr };
+  }
+
+  isInline() {
+    return false;
+  }
+
+  isIsolated() {
+    return true;
+  }
+}
+
+export function $createHRNode(style = '') {
+  return new HRNode(style);
+}
+
+export function $isHRNode(node) {
+  return node instanceof HRNode;
+}
