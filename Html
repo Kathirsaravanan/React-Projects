@@ -1,0 +1,64 @@
+// HtmlFileUploader.jsx import React from 'react'; import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'; import { $getRoot } from 'lexical'; import { $createStyledElementNode } from './nodes/StyledElementNode'; import { $createBRNode } from './nodes/BRNode'; import { $createHRNode } from './nodes/HRNode';
+
+function HtmlFileUploader() { const [editor] = useLexicalComposerContext();
+
+const walkDOM = (node) => { const nodes = [];
+
+node.childNodes.forEach((child) => {
+  if (child.nodeType === 3) {
+    const text = child.textContent.trim();
+    if (text) {
+      nodes.push($createTextNode(text));
+    }
+  } else if (child.nodeType === 1) {
+    const tag = child.tagName.toLowerCase();
+    const style = child.getAttribute('style') || '';
+    const href = tag === 'a' ? child.getAttribute('href') : '';
+
+    if (tag === 'br') {
+      nodes.push($createBRNode(style));
+    } else if (tag === 'hr') {
+      nodes.push($createHRNode(style));
+    } else {
+      const styledNode = $createStyledElementNode(style, tag, href);
+      const children = walkDOM(child);
+      children.forEach((c) => styledNode.append(c));
+      nodes.push(styledNode);
+    }
+  }
+});
+
+return nodes;
+
+};
+
+const handleFileChange = (event) => { const file = event.target.files[0]; if (!file) return;
+
+const reader = new FileReader();
+reader.onload = () => {
+  const htmlString = reader.result;
+  const parser = new DOMParser();
+  const htmlDoc = parser.parseFromString(htmlString, 'text/html');
+
+  editor.update(() => {
+    const root = $getRoot();
+    const body = htmlDoc.body;
+    const nodes = walkDOM(body);
+    root.clear();
+    nodes.forEach((node) => root.append(node));
+  });
+};
+
+reader.readAsText(file);
+
+};
+
+return ( <div> <label htmlFor="html-upload">Upload HTML File:</label> <input
+id="html-upload"
+type="file"
+accept=".html"
+onChange={handleFileChange}
+/> </div> ); }
+
+export default HtmlFileUploader;
+
