@@ -1,0 +1,92 @@
+import { TextNode } from 'lexical';
+
+export class SpanNode extends TextNode {
+  __style;
+
+  static getType() {
+    return 'span';
+  }
+
+  static clone(node) {
+    return new SpanNode(node.__text, node.__style, node.__key);
+  }
+
+  constructor(text, style = '', key) {
+    super(text, key);
+    this.__style = style;
+  }
+
+  createDOM(config) {
+    const dom = document.createElement('span');
+    dom.textContent = this.__text;
+    if (this.__style) {
+      dom.setAttribute('style', this.__style);
+    }
+    return dom;
+  }
+
+  updateDOM(prevNode, dom) {
+    if (prevNode.__text !== this.__text) {
+      dom.textContent = this.__text;
+    }
+    if (prevNode.__style !== this.__style) {
+      dom.setAttribute('style', this.__style || '');
+    }
+    return true;
+  }
+
+  exportJSON() {
+    return {
+      ...super.exportJSON(),
+      type: 'span',
+      version: 1,
+      style: this.__style,
+    };
+  }
+
+  static importJSON(json) {
+    return new SpanNode(json.text || '', json.style || '');
+  }
+
+  static importDOM() {
+    return {
+      span: (domNode) => {
+        const style = domNode.getAttribute('style') || '';
+        return {
+          conversion: () => new SpanNode(domNode.textContent || '', style),
+          priority: 1,
+        };
+      },
+    };
+  }
+
+  exportDOM() {
+    const element = document.createElement('span');
+    element.textContent = this.__text;
+    if (this.__style) {
+      element.setAttribute('style', this.__style);
+    }
+    return { element };
+  }
+
+  getStyle() {
+    return this.__style;
+  }
+
+  setStyle(style) {
+    const writable = this.getWritable();
+    writable.__style = style;
+  }
+
+  isSimpleText() {
+    return false;
+  }
+}
+
+// Factory functions
+export function $createSpanNode(text = '', style = '') {
+  return new SpanNode(text, style);
+}
+
+export function $isSpanNode(node) {
+  return node instanceof SpanNode;
