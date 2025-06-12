@@ -1,0 +1,51 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { List, AutoSizer } from 'react-virtualized';
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import { $getRoot } from 'lexical';
+
+const VirtualizedEditorView = () => {
+  const [editor] = useLexicalComposerContext();
+  const [blocks, setBlocks] = useState([]);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    return editor.registerUpdateListener(({ editorState }) => {
+      editorState.read(() => {
+        const root = $getRoot();
+        const children = root.getChildren();
+        const serialized = children.map((child) => ({
+          key: child.getKey(),
+          text: child.getTextContent(),
+        }));
+        setBlocks(serialized);
+      });
+    });
+  }, [editor]);
+
+  const rowRenderer = ({ index, key, style }) => {
+    const block = blocks[index];
+    return (
+      <div key={key} style={style} className="lexical-block">
+        {block.text}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ height: '80vh' }} ref={containerRef}>
+      <AutoSizer>
+        {({ height, width }) => (
+          <List
+            width={width}
+            height={height}
+            rowCount={blocks.length}
+            rowHeight={40}
+            rowRenderer={rowRenderer}
+          />
+        )}
+      </AutoSizer>
+    </div>
+  );
+};
+
+export default VirtualizedEditorView;
