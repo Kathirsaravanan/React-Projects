@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $getRoot, $createTextNode, $createParagraphNode } from "lexical";
 import { $createStyledElementNode } from "./nodes/StyledElementNode";
 
-const CHUNK_SIZE = 5;
+const CHUNK_SIZE = 30;
 
 function HtmlFileUploader() {
   const [editor] = useLexicalComposerContext();
   const [allChunks, setAllChunks] = useState([]);
-  const [loadedChunkIndex, setLoadedChunkIndex] = useState(0);
-  const sentinelRef = useRef(null);
+  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -29,52 +28,84 @@ function HtmlFileUploader() {
       }
 
       setAllChunks(chunked);
-      setLoadedChunkIndex(1); // Load first chunk
+      setCurrentChunkIndex(0); // Load first chunk
     };
 
     reader.readAsText(file);
   };
 
+  // Load current chunk into Lexical
   useEffect(() => {
-    if (loadedChunkIndex === 0 || loadedChunkIndex > allChunks.length) return;
+    if (!allChunks.length || currentChunkIndex >= allChunks.length || currentChunkIndex < 0) return;
 
-    const chunk = allChunks[loadedChunkIndex - 1];
+    const chunk = allChunks[currentChunkIndex];
     editor.update(() => {
       const root = $getRoot();
+      root.clear();
+
+      // Top sentinel
+      const topSentinel = $createParagraphNode();
+      topSentinel.setFormat("left");
+      topSentinel.append($createTextNode("↑"));
+      root.append(topSentinel);
+
+      // Chunk content
       chunk.forEach((child) => {
         insertNodeFromDOM(child, root);
       });
 
-      // Add sentinel node at the end
-      const sentinelParagraph = $createParagraphNode();
-      sentinelParagraph.setFormat("left");
-      sentinelParagraph.append($createTextNode("")); // empty node
-      root.append(sentinelParagraph);
+      // Bottom sentinel
+      const bottomSentinel = $createParagraphNode();
+      bottomSentinel.setFormat("left");
+      bottomSentinel.append($createTextNode("↓"));
+      root.append(bottomSentinel);
     });
-  }, [loadedChunkIndex]);
+  }, [currentChunkIndex, allChunks, editor]);
 
-  useEffect(() => {
+  // Scroll detection with delayed observer setup
+  useLayoutEffect(() => {
     const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && loadedChunkIndex < allChunks.length) {
-          console.log("🔍 Sentinel visible, loading next chunk");
-          setLoadedChunkIndex((prev) => prev + 1);
-        }
+      (entries) => {
+        entries.forEach((entry) => {
+          const text = entry.target.textContent?.trim();
+          if (!entry.isIntersecting || !text) return;
+
+          if (text === "↓" && currentChunkIndex < allChunks.length - 1) {
+            console.log("⬇️ Scrolled down");
+            setCurrentChunkIndex((prev) => prev + 1);
+          }
+
+          if (text === "↑" && currentChunkIndex > 0) {
+            console.log("⬆️ Scrolled up");
+            setCurrentChunkIndex((prev) => prev - 1);
+          }
+        });
       },
       {
         root: document.querySelector(".editor-scroll-container"),
-        threshold: 0.1,
+        threshold: 1.0,
       }
     );
 
-    const el = document.querySelector(".editor-scroll-container div[contenteditable] p:last-child");
-    if (el) {
-      sentinelRef.current = el;
-      observer.observe(el);
-    }
+    const observeSentinels = () => {
+      const topEl = Array.from(document.querySelectorAll(".editor-scroll-container p")).find(
+        (el) => el.textContent?.trim() === "↑"
+      );
+      const bottomEl = Array.from(document.querySelectorAll(".editor-scroll-container p")).find(
+        (el) => el.textContent?.trim() === "↓"
+      );
 
-    return () => observer.disconnect();
-  }, [loadedChunkIndex, allChunks.length]);
+      if (topEl) observer.observe(topEl);
+      if (bottomEl) observer.observe(bottomEl);
+    };
+
+    const timeoutId = setTimeout(observeSentinels, 100); // Delay to ensure DOM is ready
+
+    return () => {
+      clearTimeout(timeoutId);
+      observer.disconnect();
+    };
+  }, [currentChunkIndex, allChunks.length]);
 
   const insertNodeFromDOM = (child, parentLexicalNode) => {
     let lexicalNode = null;
@@ -92,52 +123,7 @@ function HtmlFileUploader() {
     const tag = child.tagName.toLowerCase();
     const style = child.getAttribute("style") || "";
 
-    switch (tag) {
-      case "p":
-      case "div":
-      case "span":
-      case "section":
-      case "article":
-      case "header":
-      case "footer":
-      case "main":
-      case "aside":
-      case "thead":
-      case "tbody":
-      case "tfoot":
-      case "tr":
-      case "td":
-      case "th":
-      case "h1":
-      case "h2":
-      case "h3":
-      case "ul":
-      case "ol":
-      case "li":
-      case "mark":
-      case "br":
-      case "sup":
-      case "sub":
-      case "hr":
-        lexicalNode = $createStyledElementNode(style, tag);
-        break;
-
-      case "a": {
-        const href = child.getAttribute("href") || "";
-        lexicalNode = $createStyledElementNode(style, tag, href);
-        break;
-      }
-
-      case "table":
-        lexicalNode = $createStyledElementNode(style, "table");
-        break;
-
-      default:
-        console.warn("🚫 Unsupported tag ignored:", tag);
-        lexicalNode = $createStyledElementNode(style, tag); // fallback
-        break;
-    }
-
+    lexicalNode = $createStyledElementNode(style, tag);
     if (lexicalNode) {
       parentLexicalNode.append(lexicalNode);
       Array.from(child.childNodes).forEach((nested) =>
@@ -149,6 +135,11 @@ function HtmlFileUploader() {
   return (
     <div className="p-2">
       <input type="file" accept=".html" onChange={handleFileChange} />
+      {allChunks.length > 0 && (
+        <p className="text-sm text-green-600 mt-2">
+          📦 Showing chunk {currentChunkIndex + 1} of {allChunks.length}
+        </p>
+      )}
     </div>
   );
 }
