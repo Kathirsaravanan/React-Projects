@@ -1,15 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { $getRoot, $createTextNode } from 'lexical';
-import { $createStyledElementNode } from './nodes/StyledElementNode';
+import { useEffect, useRef, useState } from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $getRoot, $createTextNode, $createParagraphNode } from "lexical";
+import { $createStyledElementNode } from "./nodes/StyledElementNode";
 
-const CHUNK_SIZE = 100;
+const CHUNK_SIZE = 5;
 
 function HtmlFileUploader() {
   const [editor] = useLexicalComposerContext();
   const [allChunks, setAllChunks] = useState([]);
   const [loadedChunkIndex, setLoadedChunkIndex] = useState(0);
-  const [loading, setLoading] = useState(false);
   const sentinelRef = useRef(null);
 
   const handleFileChange = (event) => {
@@ -20,12 +19,11 @@ function HtmlFileUploader() {
     reader.onload = (e) => {
       const htmlString = e.target.result;
       const parser = new DOMParser();
-      const doc = parser.parseFromString(htmlString, 'text/html');
+      const doc = parser.parseFromString(htmlString, "text/html");
       const body = doc.body;
 
       const elements = Array.from(body.childNodes);
       const chunked = [];
-
       for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
         chunked.push(elements.slice(i, i + CHUNK_SIZE));
       }
@@ -37,42 +35,47 @@ function HtmlFileUploader() {
     reader.readAsText(file);
   };
 
-  // Load a chunk into Lexical
   useEffect(() => {
     if (loadedChunkIndex === 0 || loadedChunkIndex > allChunks.length) return;
 
     const chunk = allChunks[loadedChunkIndex - 1];
-
     editor.update(() => {
       const root = $getRoot();
       chunk.forEach((child) => {
         insertNodeFromDOM(child, root);
       });
+
+      // Add sentinel node at the end
+      const sentinelParagraph = $createParagraphNode();
+      sentinelParagraph.setFormat("left");
+      sentinelParagraph.append($createTextNode("")); // empty node
+      root.append(sentinelParagraph);
     });
   }, [loadedChunkIndex]);
 
-  // Scroll observer to load next chunk
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && loadedChunkIndex < allChunks.length) {
+          console.log("🔍 Sentinel visible, loading next chunk");
           setLoadedChunkIndex((prev) => prev + 1);
         }
       },
       {
-        root: document.querySelector('.editor-container'), // Adjust to your editor wrapper
-        threshold: 1.0,
+        root: document.querySelector(".editor-scroll-container"),
+        threshold: 0.1,
       }
     );
 
-    if (sentinelRef.current) {
-      observer.observe(sentinelRef.current);
+    const el = document.querySelector(".editor-scroll-container div[contenteditable] p:last-child");
+    if (el) {
+      sentinelRef.current = el;
+      observer.observe(el);
     }
 
     return () => observer.disconnect();
-  }, [sentinelRef.current, loadedChunkIndex, allChunks.length]);
+  }, [loadedChunkIndex, allChunks.length]);
 
-  // DOM to Lexical node converter
   const insertNodeFromDOM = (child, parentLexicalNode) => {
     let lexicalNode = null;
 
@@ -87,50 +90,50 @@ function HtmlFileUploader() {
     if (child.nodeType !== Node.ELEMENT_NODE) return;
 
     const tag = child.tagName.toLowerCase();
-    const style = child.getAttribute('style') || '';
+    const style = child.getAttribute("style") || "";
 
     switch (tag) {
-      case 'p':
-      case 'div':
-      case 'span':
-      case 'section':
-      case 'article':
-      case 'header':
-      case 'footer':
-      case 'main':
-      case 'aside':
-      case 'thead':
-      case 'tbody':
-      case 'tfoot':
-      case 'tr':
-      case 'td':
-      case 'th':
-      case 'h1':
-      case 'h2':
-      case 'h3':
-      case 'ul':
-      case 'ol':
-      case 'li':
-      case 'mark':
-      case 'br':
-      case 'sup':
-      case 'sub':
-      case 'hr':
+      case "p":
+      case "div":
+      case "span":
+      case "section":
+      case "article":
+      case "header":
+      case "footer":
+      case "main":
+      case "aside":
+      case "thead":
+      case "tbody":
+      case "tfoot":
+      case "tr":
+      case "td":
+      case "th":
+      case "h1":
+      case "h2":
+      case "h3":
+      case "ul":
+      case "ol":
+      case "li":
+      case "mark":
+      case "br":
+      case "sup":
+      case "sub":
+      case "hr":
         lexicalNode = $createStyledElementNode(style, tag);
         break;
 
-      case 'a': {
-        const href = child.getAttribute('href') || '';
+      case "a": {
+        const href = child.getAttribute("href") || "";
         lexicalNode = $createStyledElementNode(style, tag, href);
         break;
       }
 
-      case 'table':
-        lexicalNode = $createStyledElementNode(style, 'table');
+      case "table":
+        lexicalNode = $createStyledElementNode(style, "table");
         break;
 
       default:
-        console.warn('🚫 Unsupported tag ignored:', tag);
+        console.warn("🚫 Unsupported tag ignored:", tag);
         lexicalNode = $createStyledElementNode(style, tag); // fallback
         break;
     }
@@ -146,8 +149,6 @@ function HtmlFileUploader() {
   return (
     <div className="p-2">
       <input type="file" accept=".html" onChange={handleFileChange} />
-      {loading && <p className="text-sm text-blue-600 mt-2">📄 Uploading & parsing large file…</p>}
-      <div ref={sentinelRef} style={{ height: 1 }} />
     </div>
   );
 }
