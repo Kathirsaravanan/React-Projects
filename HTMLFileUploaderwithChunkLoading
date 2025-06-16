@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import { $getRoot, $createTextNode } from 'lexical';
 import { $createStyledElementNode } from './nodes/StyledElementNode';
 
-const CHUNK_SIZE = 50;
+const CHUNK_SIZE = 100;
 
 function HtmlFileUploader() {
   const [editor] = useLexicalComposerContext();
+  const [allChunks, setAllChunks] = useState([]);
+  const [loadedChunkIndex, setLoadedChunkIndex] = useState(0);
   const [loading, setLoading] = useState(false);
+  const sentinelRef = useRef(null);
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -20,111 +23,131 @@ function HtmlFileUploader() {
       const doc = parser.parseFromString(htmlString, 'text/html');
       const body = doc.body;
 
-      setLoading(true);
+      const elements = Array.from(body.childNodes);
+      const chunked = [];
 
-      editor.update(() => {
-        const root = $getRoot();
-        processChunks(Array.from(body.childNodes), root, () => {
-          setLoading(false);
-          console.log('✅ Large file uploaded and parsed successfully');
-        });
-      });
+      for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
+        chunked.push(elements.slice(i, i + CHUNK_SIZE));
+      }
+
+      setAllChunks(chunked);
+      setLoadedChunkIndex(1); // Load first chunk
     };
 
     reader.readAsText(file);
   };
 
-  const processChunks = (domNodes, parentLexicalNode, doneCallback) => {
-    let index = 0;
+  // Load a chunk into Lexical
+  useEffect(() => {
+    if (loadedChunkIndex === 0 || loadedChunkIndex > allChunks.length) return;
 
-    const processNextChunk = () => {
-      const chunk = domNodes.slice(index, index + CHUNK_SIZE);
+    const chunk = allChunks[loadedChunkIndex - 1];
 
-      editor.update(() => {
-        chunk.forEach((child) => {
-          let lexicalNode = null;
-
-          if (child.nodeType === Node.TEXT_NODE) {
-            const text = child.textContent.trim();
-            if (text) {
-              parentLexicalNode.append($createTextNode(text));
-            }
-            return;
-          }
-
-          if (child.nodeType !== Node.ELEMENT_NODE) return;
-
-          const tag = child.tagName.toLowerCase();
-          const style = child.getAttribute('style') || '';
-
-          switch (tag) {
-            case 'p':
-            case 'div':
-            case 'span':
-            case 'section':
-            case 'article':
-            case 'header':
-            case 'footer':
-            case 'main':
-            case 'aside':
-            case 'thead':
-            case 'tbody':
-            case 'tfoot':
-            case 'tr':
-            case 'td':
-            case 'th':
-            case 'h1':
-            case 'h2':
-            case 'h3':
-            case 'ul':
-            case 'ol':
-            case 'li':
-            case 'mark':
-            case 'br':
-            case 'sup':
-            case 'sub':
-              lexicalNode = $createStyledElementNode(style, tag);
-              break;
-
-            case 'a': {
-              const href = child.getAttribute('href') || '';
-              lexicalNode = $createStyledElementNode(style, tag, href);
-              break;
-            }
-
-            case 'table':
-              lexicalNode = $createStyledElementNode(style, 'table');
-              break;
-
-            default:
-              console.warn('🚫 Unsupported tag ignored:', tag);
-              lexicalNode = $createStyledElementNode(style, tag); // fallback
-              break;
-          }
-
-          if (lexicalNode) {
-            parentLexicalNode.append(lexicalNode);
-            // Process child nodes recursively in chunks
-            processChunks(Array.from(child.childNodes), lexicalNode);
-          }
-        });
+    editor.update(() => {
+      const root = $getRoot();
+      chunk.forEach((child) => {
+        insertNodeFromDOM(child, root);
       });
+    });
+  }, [loadedChunkIndex]);
 
-      index += CHUNK_SIZE;
-      if (index < domNodes.length) {
-        setTimeout(processNextChunk, 0); // Let UI breathe
-      } else if (doneCallback) {
-        doneCallback();
+  // Scroll observer to load next chunk
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && loadedChunkIndex < allChunks.length) {
+          setLoadedChunkIndex((prev) => prev + 1);
+        }
+      },
+      {
+        root: document.querySelector('.editor-container'), // Adjust to your editor wrapper
+        threshold: 1.0,
       }
-    };
+    );
 
-    processNextChunk();
+    if (sentinelRef.current) {
+      observer.observe(sentinelRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [sentinelRef.current, loadedChunkIndex, allChunks.length]);
+
+  // DOM to Lexical node converter
+  const insertNodeFromDOM = (child, parentLexicalNode) => {
+    let lexicalNode = null;
+
+    if (child.nodeType === Node.TEXT_NODE) {
+      const text = child.textContent.trim();
+      if (text) {
+        parentLexicalNode.append($createTextNode(text));
+      }
+      return;
+    }
+
+    if (child.nodeType !== Node.ELEMENT_NODE) return;
+
+    const tag = child.tagName.toLowerCase();
+    const style = child.getAttribute('style') || '';
+
+    switch (tag) {
+      case 'p':
+      case 'div':
+      case 'span':
+      case 'section':
+      case 'article':
+      case 'header':
+      case 'footer':
+      case 'main':
+      case 'aside':
+      case 'thead':
+      case 'tbody':
+      case 'tfoot':
+      case 'tr':
+      case 'td':
+      case 'th':
+      case 'h1':
+      case 'h2':
+      case 'h3':
+      case 'ul':
+      case 'ol':
+      case 'li':
+      case 'mark':
+      case 'br':
+      case 'sup':
+      case 'sub':
+      case 'hr':
+        lexicalNode = $createStyledElementNode(style, tag);
+        break;
+
+      case 'a': {
+        const href = child.getAttribute('href') || '';
+        lexicalNode = $createStyledElementNode(style, tag, href);
+        break;
+      }
+
+      case 'table':
+        lexicalNode = $createStyledElementNode(style, 'table');
+        break;
+
+      default:
+        console.warn('🚫 Unsupported tag ignored:', tag);
+        lexicalNode = $createStyledElementNode(style, tag); // fallback
+        break;
+    }
+
+    if (lexicalNode) {
+      parentLexicalNode.append(lexicalNode);
+      Array.from(child.childNodes).forEach((nested) =>
+        insertNodeFromDOM(nested, lexicalNode)
+      );
+    }
   };
 
   return (
     <div className="p-2">
       <input type="file" accept=".html" onChange={handleFileChange} />
       {loading && <p className="text-sm text-blue-600 mt-2">📄 Uploading & parsing large file…</p>}
+      <div ref={sentinelRef} style={{ height: 1 }} />
     </div>
   );
 }
