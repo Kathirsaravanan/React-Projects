@@ -1,0 +1,132 @@
+import React, { useState } from 'react';
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import { $getRoot, $createTextNode } from 'lexical';
+import { $createStyledElementNode } from './nodes/StyledElementNode';
+
+const CHUNK_SIZE = 50;
+
+function HtmlFileUploader() {
+  const [editor] = useLexicalComposerContext();
+  const [loading, setLoading] = useState(false);
+
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const htmlString = e.target.result;
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      const body = doc.body;
+
+      setLoading(true);
+
+      editor.update(() => {
+        const root = $getRoot();
+        processChunks(Array.from(body.childNodes), root, () => {
+          setLoading(false);
+          console.log('✅ Large file uploaded and parsed successfully');
+        });
+      });
+    };
+
+    reader.readAsText(file);
+  };
+
+  const processChunks = (domNodes, parentLexicalNode, doneCallback) => {
+    let index = 0;
+
+    const processNextChunk = () => {
+      const chunk = domNodes.slice(index, index + CHUNK_SIZE);
+
+      editor.update(() => {
+        chunk.forEach((child) => {
+          let lexicalNode = null;
+
+          if (child.nodeType === Node.TEXT_NODE) {
+            const text = child.textContent.trim();
+            if (text) {
+              parentLexicalNode.append($createTextNode(text));
+            }
+            return;
+          }
+
+          if (child.nodeType !== Node.ELEMENT_NODE) return;
+
+          const tag = child.tagName.toLowerCase();
+          const style = child.getAttribute('style') || '';
+
+          switch (tag) {
+            case 'p':
+            case 'div':
+            case 'span':
+            case 'section':
+            case 'article':
+            case 'header':
+            case 'footer':
+            case 'main':
+            case 'aside':
+            case 'thead':
+            case 'tbody':
+            case 'tfoot':
+            case 'tr':
+            case 'td':
+            case 'th':
+            case 'h1':
+            case 'h2':
+            case 'h3':
+            case 'ul':
+            case 'ol':
+            case 'li':
+            case 'mark':
+            case 'br':
+            case 'sup':
+            case 'sub':
+              lexicalNode = $createStyledElementNode(style, tag);
+              break;
+
+            case 'a': {
+              const href = child.getAttribute('href') || '';
+              lexicalNode = $createStyledElementNode(style, tag, href);
+              break;
+            }
+
+            case 'table':
+              lexicalNode = $createStyledElementNode(style, 'table');
+              break;
+
+            default:
+              console.warn('🚫 Unsupported tag ignored:', tag);
+              lexicalNode = $createStyledElementNode(style, tag); // fallback
+              break;
+          }
+
+          if (lexicalNode) {
+            parentLexicalNode.append(lexicalNode);
+            // Process child nodes recursively in chunks
+            processChunks(Array.from(child.childNodes), lexicalNode);
+          }
+        });
+      });
+
+      index += CHUNK_SIZE;
+      if (index < domNodes.length) {
+        setTimeout(processNextChunk, 0); // Let UI breathe
+      } else if (doneCallback) {
+        doneCallback();
+      }
+    };
+
+    processNextChunk();
+  };
+
+  return (
+    <div className="p-2">
+      <input type="file" accept=".html" onChange={handleFileChange} />
+      {loading && <p className="text-sm text-blue-600 mt-2">📄 Uploading & parsing large file…</p>}
+    </div>
+  );
+}
+
+export default HtmlFileUploader;
