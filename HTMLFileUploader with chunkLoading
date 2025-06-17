@@ -20,43 +20,67 @@ function HtmlFileUploader() {
       const parser = new DOMParser();
       const doc = parser.parseFromString(htmlString, "text/html");
       const body = doc.body;
-
       const elements = Array.from(body.childNodes);
-      console.log('elements',elements)
+
       const chunked = [];
       for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
         chunked.push(elements.slice(i, i + CHUNK_SIZE));
-        console.log('chunked', chunked)
       }
 
+      // Clear storage for new file load
+      chunked.forEach((_, i) => localStorage.removeItem(`chunk-${i}`));
+
       setAllChunks(chunked);
-      setCurrentChunkIndex(0); // Load first chunk
+      setCurrentChunkIndex(0);
     };
 
     reader.readAsText(file);
   };
 
-  // Load current chunk into Lexical
+  // Save the current chunk to localStorage before changing
+  const saveChunkToStorage = (index) => {
+    const editorState = editor.getEditorState();
+    const serialized = JSON.stringify(editorState);
+    localStorage.setItem(`chunk-${index}`, serialized);
+  };
+
+  const loadChunkFromStorage = (index) => {
+    const saved = localStorage.getItem(`chunk-${index}`);
+    if (!saved) return null;
+    try {
+      const editorState = editor.parseEditorState(saved);
+      return editorState;
+    } catch (err) {
+      console.error("Failed to parse saved state", err);
+      return null;
+    }
+  };
+
+  // Load chunk
   useEffect(() => {
     if (!allChunks.length || currentChunkIndex >= allChunks.length || currentChunkIndex < 0) return;
 
     const chunk = allChunks[currentChunkIndex];
+
     editor.update(() => {
+      const stored = loadChunkFromStorage(currentChunkIndex, editor);
+      if (stored) {
+        editor.setEditorState(stored);
+        return;
+      }
+
       const root = $getRoot();
       root.clear();
 
-      // Top sentinel
       const topSentinel = $createParagraphNode();
       topSentinel.setFormat("left");
       topSentinel.append($createTextNode("↑"));
       root.append(topSentinel);
 
-      // Chunk content
       chunk.forEach((child) => {
         insertNodeFromDOM(child, root);
       });
 
-      // Bottom sentinel
       const bottomSentinel = $createParagraphNode();
       bottomSentinel.setFormat("left");
       bottomSentinel.append($createTextNode("↓"));
@@ -64,7 +88,7 @@ function HtmlFileUploader() {
     });
   }, [currentChunkIndex, allChunks, editor]);
 
-  // Scroll detection with delayed observer setup
+  // Scroll detection
   useLayoutEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
@@ -74,11 +98,13 @@ function HtmlFileUploader() {
 
           if (text === "↓" && currentChunkIndex < allChunks.length - 1) {
             console.log("⬇️ Scrolled down");
+            editor.update(() => saveChunkToStorage(currentChunkIndex));
             setCurrentChunkIndex((prev) => prev + 1);
           }
 
           if (text === "↑" && currentChunkIndex > 0) {
             console.log("⬆️ Scrolled up");
+            editor.update(() => saveChunkToStorage(currentChunkIndex));
             setCurrentChunkIndex((prev) => prev - 1);
           }
         });
@@ -101,7 +127,7 @@ function HtmlFileUploader() {
       if (bottomEl) observer.observe(bottomEl);
     };
 
-    const timeoutId = setTimeout(observeSentinels, 100); // Delay to ensure DOM is ready
+    const timeoutId = setTimeout(observeSentinels, 100);
 
     return () => {
       clearTimeout(timeoutId);
