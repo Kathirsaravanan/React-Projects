@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getRoot, $createTextNode, $createParagraphNode } from "lexical";
+import { $createTextNode, $getRoot } from "lexical";
 import { $createStyledElementNode } from "./nodes/StyledElementNode";
 
 const CHUNK_SIZE = 50;
 
-function HtmlFileUploader() {
+function HtmlFileUploader({ scrollContainerRef }) {
   const [editor] = useLexicalComposerContext();
   const [allChunks, setAllChunks] = useState([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
@@ -27,9 +27,6 @@ function HtmlFileUploader() {
         chunked.push(elements.slice(i, i + CHUNK_SIZE));
       }
 
-      // Clear storage for new file load
-      chunked.forEach((_, i) => localStorage.removeItem(`chunk-${i}`));
-
       setAllChunks(chunked);
       setCurrentChunkIndex(0);
     };
@@ -37,107 +34,15 @@ function HtmlFileUploader() {
     reader.readAsText(file);
   };
 
-  // Save the current chunk to localStorage before changing
-  const saveChunkToStorage = (index) => {
-    const editorState = editor.getEditorState();
-    const serialized = JSON.stringify(editorState);
-    localStorage.setItem(`chunk-${index}`, serialized);
-  };
-
-  const loadChunkFromStorage = (index) => {
-    const saved = localStorage.getItem(`chunk-${index}`);
-    if (!saved) return null;
-    try {
-      const editorState = editor.parseEditorState(saved);
-      return editorState;
-    } catch (err) {
-      console.error("Failed to parse saved state", err);
-      return null;
-    }
-  };
-
-  // Load chunk
-  useEffect(() => {
-    if (!allChunks.length || currentChunkIndex >= allChunks.length || currentChunkIndex < 0) return;
-
-    const chunk = allChunks[currentChunkIndex];
-
-    editor.update(() => {
-      const stored = loadChunkFromStorage(currentChunkIndex, editor);
-      if (stored) {
-        editor.setEditorState(stored);
-        return;
-      }
-
-      const root = $getRoot();
-      root.clear();
-
-      const topSentinel = $createParagraphNode();
-      topSentinel.setFormat("left");
-      topSentinel.append($createTextNode("↑"));
-      root.append(topSentinel);
-
-      chunk.forEach((child) => {
-        insertNodeFromDOM(child, root);
-      });
-
-      const bottomSentinel = $createParagraphNode();
-      bottomSentinel.setFormat("left");
-      bottomSentinel.append($createTextNode("↓"));
-      root.append(bottomSentinel);
-    });
-  }, [currentChunkIndex, allChunks, editor]);
-
-  // Scroll detection
-  useLayoutEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const text = entry.target.textContent?.trim();
-          if (!entry.isIntersecting || !text) return;
-
-          if (text === "↓" && currentChunkIndex < allChunks.length - 1) {
-            console.log("⬇️ Scrolled down");
-            editor.update(() => saveChunkToStorage(currentChunkIndex));
-            setCurrentChunkIndex((prev) => prev + 1);
-          }
-
-          if (text === "↑" && currentChunkIndex > 0) {
-            console.log("⬆️ Scrolled up");
-            editor.update(() => saveChunkToStorage(currentChunkIndex));
-            setCurrentChunkIndex((prev) => prev - 1);
-          }
-        });
-      },
-      {
-        root: document.querySelector(".editor-scroll-container"),
-        threshold: 1.0,
-      }
-    );
-
-    const observeSentinels = () => {
-      const topEl = Array.from(document.querySelectorAll(".editor-scroll-container p")).find(
-        (el) => el.textContent?.trim() === "↑"
-      );
-      const bottomEl = Array.from(document.querySelectorAll(".editor-scroll-container p")).find(
-        (el) => el.textContent?.trim() === "↓"
-      );
-
-      if (topEl) observer.observe(topEl);
-      if (bottomEl) observer.observe(bottomEl);
+  const debounce = (func, delay) => {
+    let timeout;
+    return (...args) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), delay);
     };
-
-    const timeoutId = setTimeout(observeSentinels, 100);
-
-    return () => {
-      clearTimeout(timeoutId);
-      observer.disconnect();
-    };
-  }, [currentChunkIndex, allChunks.length]);
+  };
 
   const insertNodeFromDOM = (child, parentLexicalNode) => {
-    let lexicalNode = null;
-
     if (child.nodeType === Node.TEXT_NODE) {
       const text = child.textContent.trim();
       if (text) {
@@ -151,7 +56,7 @@ function HtmlFileUploader() {
     const tag = child.tagName.toLowerCase();
     const style = child.getAttribute("style") || "";
 
-    lexicalNode = $createStyledElementNode(style, tag);
+    const lexicalNode = $createStyledElementNode(style, tag);
     if (lexicalNode) {
       parentLexicalNode.append(lexicalNode);
       Array.from(child.childNodes).forEach((nested) =>
@@ -159,6 +64,61 @@ function HtmlFileUploader() {
       );
     }
   };
+
+  const loadChunk = (index) => {
+    if (!allChunks.length || index < 0 || index >= allChunks.length) return;
+
+    const chunk = allChunks[index];
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      chunk.forEach((child) => insertNodeFromDOM(child, root));
+    });
+
+    // Scroll to top after loading
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  };
+
+  useEffect(() => {
+    loadChunk(currentChunkIndex);
+  }, [currentChunkIndex, allChunks]);
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+
+    console.log("📏 Scroll Metrics:");
+    console.log("scrollTop:", scrollTop);
+    console.log("scrollHeight:", scrollHeight);
+    console.log("clientHeight:", clientHeight);
+    console.log("Distance from bottom:", distanceFromBottom);
+    console.log(currentChunkIndex)
+    if (distanceFromBottom <= 10 && currentChunkIndex < allChunks.length - 1) {
+      console.log("🎯 Reached bottom, loading next chunk");
+      setCurrentChunkIndex((prev) => prev + 1);
+      console.log('current index from if statement', currentChunkIndex)
+    } else if(scrollTop <= 10 && currentChunkIndex > 0) {
+      // console.log("⬆️ Reached top, loading previous chunk");
+      setCurrentChunkIndex((prev) => prev - 1);
+    }
+  };
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      const debouncedScroll = debounce(handleScroll, 100);
+      container.addEventListener("scroll", debouncedScroll);
+
+      return () => {
+        container.removeEventListener("scroll", debouncedScroll);
+      };
+    }
+  }, [scrollContainerRef]);
 
   return (
     <div className="p-2">
