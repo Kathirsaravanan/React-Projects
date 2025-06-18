@@ -65,17 +65,33 @@ function HtmlFileUploader({ scrollContainerRef }) {
     }
   };
 
+  const switchChunk = (newIndex) => {
+    // Save current editor state to localStorage
+    editor.update(() => {
+      const editorState = editor.getEditorState();
+      const json = JSON.stringify(editorState.toJSON());
+      localStorage.setItem(`html_chunk_${currentChunkIndex}`, json);
+    });
+
+    setCurrentChunkIndex(newIndex);
+  };
+
   const loadChunk = (index) => {
     if (!allChunks.length || index < 0 || index >= allChunks.length) return;
 
-    const chunk = allChunks[index];
-    editor.update(() => {
-      const root = $getRoot();
-      root.clear();
-      chunk.forEach((child) => insertNodeFromDOM(child, root));
-    });
+    const saved = localStorage.getItem(`html_chunk_${index}`);
+    if (saved) {
+      const parsedState = editor.parseEditorState(JSON.parse(saved));
+      editor.setEditorState(parsedState);
+    } else {
+      const chunk = allChunks[index];
+      editor.update(() => {
+        const root = $getRoot();
+        root.clear();
+        chunk.forEach((child) => insertNodeFromDOM(child, root));
+      });
+    }
 
-    // Scroll to top after loading
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }
@@ -92,19 +108,10 @@ function HtmlFileUploader({ scrollContainerRef }) {
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
 
-    console.log("📏 Scroll Metrics:");
-    console.log("scrollTop:", scrollTop);
-    console.log("scrollHeight:", scrollHeight);
-    console.log("clientHeight:", clientHeight);
-    console.log("Distance from bottom:", distanceFromBottom);
-    console.log(currentChunkIndex)
     if (distanceFromBottom <= 10 && currentChunkIndex < allChunks.length - 1) {
-      console.log("🎯 Reached bottom, loading next chunk");
-      setCurrentChunkIndex((prev) => prev + 1);
-      console.log('current index from if statement', currentChunkIndex)
-    } else if(scrollTop <= 10 && currentChunkIndex > 0) {
-      // console.log("⬆️ Reached top, loading previous chunk");
-      setCurrentChunkIndex((prev) => prev - 1);
+      switchChunk(currentChunkIndex + 1);
+    } else if (scrollTop <= 10 && currentChunkIndex > 0) {
+      switchChunk(currentChunkIndex - 1);
     }
   };
 
@@ -118,7 +125,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
         container.removeEventListener("scroll", debouncedScroll);
       };
     }
-  }, [scrollContainerRef]);
+  }, [scrollContainerRef, currentChunkIndex, allChunks]);
 
   return (
     <div className="p-2">
