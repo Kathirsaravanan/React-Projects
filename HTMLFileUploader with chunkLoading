@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $createTextNode, $getRoot } from "lexical";
 import { $createStyledElementNode } from "./nodes/StyledElementNode";
+import {
+  saveChunkToDB,
+  getChunkFromDB,
+  deleteOtherChunks
+} from "./db";
 
 const CHUNK_SIZE = 50;
 
@@ -9,6 +14,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
   const [editor] = useLexicalComposerContext();
   const [allChunks, setAllChunks] = useState([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
+  const [cachedChunks, setCachedChunks] = useState({});
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -29,6 +35,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
 
       setAllChunks(chunked);
       setCurrentChunkIndex(0);
+      setCachedChunks({});
     };
 
     reader.readAsText(file);
@@ -65,23 +72,22 @@ function HtmlFileUploader({ scrollContainerRef }) {
     }
   };
 
-  const switchChunk = (newIndex) => {
-    // Save current editor state to localStorage
+  const saveChunk = async (index) => {
     editor.update(() => {
       const editorState = editor.getEditorState();
-      const json = JSON.stringify(editorState.toJSON());
-      localStorage.setItem(`html_chunk_${currentChunkIndex}`, json);
+      const json = editorState.toJSON();
+      saveChunkToDB(index, json);
+      setCachedChunks((prev) => ({
+        ...prev,
+        [index]: json,
+      }));
     });
-
-    setCurrentChunkIndex(newIndex);
   };
 
-  const loadChunk = (index) => {
-    if (!allChunks.length || index < 0 || index >= allChunks.length) return;
-
-    const saved = localStorage.getItem(`html_chunk_${index}`);
+  const restoreChunk = async (index) => {
+    const saved = cachedChunks[index] || await getChunkFromDB(index);
     if (saved) {
-      const parsedState = editor.parseEditorState(JSON.parse(saved));
+      const parsedState = editor.parseEditorState(saved);
       editor.setEditorState(parsedState);
     } else {
       const chunk = allChunks[index];
@@ -91,10 +97,45 @@ function HtmlFileUploader({ scrollContainerRef }) {
         chunk.forEach((child) => insertNodeFromDOM(child, root));
       });
     }
+  };
+
+  const maintainCacheWindow = async (centerIndex) => {
+    const keep = [centerIndex - 1, centerIndex, centerIndex + 1].filter(
+      (i) => i >= 0 && i < allChunks.length
+    );
+
+    await deleteOtherChunks(keep);
+  };
+
+  const switchChunk = async (newIndex) => {
+    if (newIndex < 0 || newIndex >= allChunks.length) return;
+
+    await saveChunk(currentChunkIndex);
+    setCurrentChunkIndex(newIndex);
+  };
+
+  const loadChunk = async (index) => {
+    if (!allChunks.length || index < 0 || index >= allChunks.length) return;
+
+    await restoreChunk(index);
 
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }
+
+    [index - 1, index + 1].forEach(async (i) => {
+      if (i >= 0 && i < allChunks.length && !cachedChunks[i]) {
+        const saved = await getChunkFromDB(i);
+        if (saved) {
+          setCachedChunks((prev) => ({
+            ...prev,
+            [i]: saved,
+          }));
+        }
+      }
+    });
+
+    await maintainCacheWindow(index);
   };
 
   useEffect(() => {
@@ -120,10 +161,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
     if (container) {
       const debouncedScroll = debounce(handleScroll, 100);
       container.addEventListener("scroll", debouncedScroll);
-
-      return () => {
-        container.removeEventListener("scroll", debouncedScroll);
-      };
+      return () => container.removeEventListener("scroll", debouncedScroll);
     }
   }, [scrollContainerRef, currentChunkIndex, allChunks]);
 
