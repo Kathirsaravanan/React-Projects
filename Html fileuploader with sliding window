@@ -1,6 +1,10 @@
 import { useEffect, useState, useRef } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $createTextNode, $getRoot, $createParagraphNode } from "lexical";
+import {
+  $createTextNode,
+  $getRoot,
+  $createParagraphNode
+} from "lexical";
 import { $createStyledElementNode } from "./nodes/StyledElementNode";
 import { saveChunk, clearChunks, loadChunkFromDB } from "../../../DB/indexDB";
 
@@ -13,6 +17,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
   const [visibleChunkIndices, setVisibleChunkIndices] = useState([]);
 
   const adjacentChunksCache = useRef({});
+  const mountedChunkIndices = useRef(new Set());
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -31,16 +36,14 @@ function HtmlFileUploader({ scrollContainerRef }) {
       const body = doc.body;
       const elements = Array.from(body.childNodes);
 
-      console.log("Total elements found:", elements.length);
-
       const chunked = [];
       for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
         chunked.push(elements.slice(i, i + CHUNK_SIZE));
       }
 
-      console.log("Total chunks created:", chunked.length);
       await clearChunks();
       adjacentChunksCache.current = {};
+      mountedChunkIndices.current = new Set();
       setAllChunks(chunked);
       setCenterChunkIndex(0);
     };
@@ -96,29 +99,46 @@ function HtmlFileUploader({ scrollContainerRef }) {
 
   const loadChunksWindow = async (centerIndex) => {
     const indicesToLoad = getChunkWindow(centerIndex);
-    const cache = adjacentChunksCache.current;
+    const oldIndices = Array.from(mountedChunkIndices.current);
+    const toAdd = indicesToLoad.filter(i => !mountedChunkIndices.current.has(i));
+    const toRemove = oldIndices.filter(i => !indicesToLoad.includes(i));
 
-    console.log(`🧩 Loading chunks:`, indicesToLoad);
+    console.log("🧩 Center:", centerIndex, "➕ Add:", toAdd, "➖ Remove:", toRemove);
 
     editor.update(() => {
       const root = $getRoot();
-      root.clear();
 
-      indicesToLoad.forEach((index) => {
+      // Remove old chunks
+      root.getChildren().forEach((node) => {
+        const id = node.getAttribute?.("data-chunk-id");
+        if (id) {
+          const index = parseInt(id.replace("chunk-", ""));
+          if (toRemove.includes(index)) {
+            node.remove();
+            mountedChunkIndices.current.delete(index);
+          }
+        }
+      });
+
+      // Add new chunks
+      toAdd.forEach((index) => {
         const chunk = allChunks[index];
         if (!chunk) return;
 
-        const divider = $createParagraphNode();
-        divider.append($createTextNode(`--- Chunk ${index + 1} ---`));
-        root.append(divider);
+        const wrapper = $createParagraphNode();
+        wrapper.setAttribute("data-chunk-id", `chunk-${index}`);
+        wrapper.append($createTextNode(`--- Chunk ${index + 1} ---`));
+        root.append(wrapper);
 
-        chunk.forEach((child, i) => {
+        chunk.forEach((child) => {
           try {
-            insertNodeFromDOM(child, root);
+            insertNodeFromDOM(child, wrapper);
           } catch (err) {
-            console.error(`Error inserting node ${i} from chunk ${index}:`, err);
+            console.error(`Error inserting node ${index}`, err);
           }
         });
+
+        mountedChunkIndices.current.add(index);
       });
     });
 
@@ -132,14 +152,18 @@ function HtmlFileUploader({ scrollContainerRef }) {
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
 
-    if (distanceFromBottom <= 30 && centerChunkIndex < allChunks.length - 1) {
-      const newCenter = centerChunkIndex + 1;
-      console.log("➡ Scroll Down: new center chunk", newCenter);
-      setCenterChunkIndex(newCenter);
-    } else if (scrollTop <= 30 && centerChunkIndex > 0) {
-      const newCenter = centerChunkIndex - 1;
-      console.log("⬅ Scroll Up: new center chunk", newCenter);
-      setCenterChunkIndex(newCenter);
+    if (
+      distanceFromBottom <= 30 &&
+      centerChunkIndex < allChunks.length - 1 &&
+      !visibleChunkIndices.includes(centerChunkIndex + 1)
+    ) {
+      setCenterChunkIndex(centerChunkIndex + 1);
+    } else if (
+      scrollTop <= 30 &&
+      centerChunkIndex > 0 &&
+      !visibleChunkIndices.includes(centerChunkIndex - 1)
+    ) {
+      setCenterChunkIndex(centerChunkIndex - 1);
     }
   };
 
@@ -171,7 +195,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
         container.removeEventListener("scroll", debouncedScroll);
       };
     }
-  }, [centerChunkIndex, allChunks]);
+  }, [centerChunkIndex, allChunks, visibleChunkIndices]);
 
   return (
     <div className="p-2">
@@ -179,10 +203,10 @@ function HtmlFileUploader({ scrollContainerRef }) {
       {allChunks.length > 0 && (
         <div className="mt-2">
           <p className="text-sm text-green-600">
-            📦 Showing chunks {visibleChunkIndices.map((i) => i + 1).join(", ")} of {allChunks.length}
+            📦 Showing chunks {visibleChunkIndices.map(i => i + 1).join(", ")} of {allChunks.length}
           </p>
           <p className="text-xs text-gray-500">
-            🔄 Sliding window: 3–5 chunks dynamically loaded into editor
+            🧠 Sliding window (3–5 chunks), memory optimized
           </p>
           <div className="mt-2 space-x-2">
             <button
