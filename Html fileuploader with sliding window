@@ -1,0 +1,209 @@
+import { useEffect, useState, useRef } from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $createTextNode, $getRoot, $createParagraphNode } from "lexical";
+import { $createStyledElementNode } from "./nodes/StyledElementNode";
+import { saveChunk, clearChunks, loadChunkFromDB } from "../../../DB/indexDB";
+
+const CHUNK_SIZE = 60;
+
+function HtmlFileUploader({ scrollContainerRef }) {
+  const [editor] = useLexicalComposerContext();
+  const [allChunks, setAllChunks] = useState([]);
+  const [centerChunkIndex, setCenterChunkIndex] = useState(0);
+  const [visibleChunkIndices, setVisibleChunkIndices] = useState([]);
+
+  const adjacentChunksCache = useRef({});
+
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith(".html")) {
+      alert("Please upload a valid HTML file.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const htmlString = e.target.result;
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, "text/html");
+      const body = doc.body;
+      const elements = Array.from(body.childNodes);
+
+      console.log("Total elements found:", elements.length);
+
+      const chunked = [];
+      for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
+        chunked.push(elements.slice(i, i + CHUNK_SIZE));
+      }
+
+      console.log("Total chunks created:", chunked.length);
+      await clearChunks();
+      adjacentChunksCache.current = {};
+      setAllChunks(chunked);
+      setCenterChunkIndex(0);
+    };
+
+    reader.readAsText(file);
+  };
+
+  const getChunkWindow = (centerIndex) => {
+    const indices = [];
+    for (let i = centerIndex - 2; i <= centerIndex + 2; i++) {
+      if (i >= 0 && i < allChunks.length) {
+        indices.push(i);
+      }
+    }
+    return indices;
+  };
+
+  const insertNodeFromDOM = (child, parentLexicalNode) => {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const text = child.textContent.trim();
+      if (text) {
+        const paragraph = $createParagraphNode();
+        paragraph.append($createTextNode(text));
+        parentLexicalNode.append(paragraph);
+      }
+      return;
+    }
+
+    if (child.nodeType !== Node.ELEMENT_NODE) return;
+
+    const tag = child.tagName.toLowerCase();
+    const style = child.getAttribute("style") || "";
+    const lexicalNode = $createStyledElementNode(style, tag);
+
+    if (lexicalNode) {
+      parentLexicalNode.append(lexicalNode);
+      Array.from(child.childNodes).forEach((nested) =>
+        insertNodeFromDOM(nested, lexicalNode)
+      );
+    }
+  };
+
+  const preloadAdjacentChunks = async (centerIndex) => {
+    const cache = adjacentChunksCache.current;
+    const preloadIndices = getChunkWindow(centerIndex);
+    for (const i of preloadIndices) {
+      if (!cache[i]) {
+        const saved = await loadChunkFromDB(i);
+        if (saved) cache[i] = saved;
+      }
+    }
+  };
+
+  const loadChunksWindow = async (centerIndex) => {
+    const indicesToLoad = getChunkWindow(centerIndex);
+    const cache = adjacentChunksCache.current;
+
+    console.log(`🧩 Loading chunks:`, indicesToLoad);
+
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+
+      indicesToLoad.forEach((index) => {
+        const chunk = allChunks[index];
+        if (!chunk) return;
+
+        const divider = $createParagraphNode();
+        divider.append($createTextNode(`--- Chunk ${index + 1} ---`));
+        root.append(divider);
+
+        chunk.forEach((child, i) => {
+          try {
+            insertNodeFromDOM(child, root);
+          } catch (err) {
+            console.error(`Error inserting node ${i} from chunk ${index}:`, err);
+          }
+        });
+      });
+    });
+
+    setVisibleChunkIndices(indicesToLoad);
+  };
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+
+    if (distanceFromBottom <= 30 && centerChunkIndex < allChunks.length - 1) {
+      const newCenter = centerChunkIndex + 1;
+      console.log("➡ Scroll Down: new center chunk", newCenter);
+      setCenterChunkIndex(newCenter);
+    } else if (scrollTop <= 30 && centerChunkIndex > 0) {
+      const newCenter = centerChunkIndex - 1;
+      console.log("⬅ Scroll Up: new center chunk", newCenter);
+      setCenterChunkIndex(newCenter);
+    }
+  };
+
+  const debounce = (func, delay) => {
+    let timeout;
+    return (...args) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), delay);
+    };
+  };
+
+  useEffect(() => {
+    if (allChunks.length > 0) {
+      loadChunksWindow(centerChunkIndex);
+    }
+  }, [centerChunkIndex, allChunks]);
+
+  useEffect(() => {
+    preloadAdjacentChunks(centerChunkIndex);
+  }, [centerChunkIndex]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      const debouncedScroll = debounce(handleScroll, 200);
+      container.addEventListener("scroll", debouncedScroll, { passive: true });
+
+      return () => {
+        container.removeEventListener("scroll", debouncedScroll);
+      };
+    }
+  }, [centerChunkIndex, allChunks]);
+
+  return (
+    <div className="p-2">
+      <input type="file" accept=".html" onChange={handleFileChange} />
+      {allChunks.length > 0 && (
+        <div className="mt-2">
+          <p className="text-sm text-green-600">
+            📦 Showing chunks {visibleChunkIndices.map((i) => i + 1).join(", ")} of {allChunks.length}
+          </p>
+          <p className="text-xs text-gray-500">
+            🔄 Sliding window: 3–5 chunks dynamically loaded into editor
+          </p>
+          <div className="mt-2 space-x-2">
+            <button
+              onClick={() => setCenterChunkIndex(Math.max(0, centerChunkIndex - 1))}
+              className="px-2 py-1 text-xs bg-gray-500 text-white rounded"
+              disabled={centerChunkIndex === 0}
+            >
+              ← Prev
+            </button>
+            <button
+              onClick={() => setCenterChunkIndex(Math.min(allChunks.length - 1, centerChunkIndex + 1))}
+              className="px-2 py-1 text-xs bg-gray-500 text-white rounded"
+              disabled={centerChunkIndex === allChunks.length - 1}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default HtmlFileUploader;
