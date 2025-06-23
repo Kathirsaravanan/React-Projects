@@ -1,121 +1,255 @@
-import { useEffect, useState, useRef } from "react"; import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext"; import { $createTextNode, $getRoot, $createParagraphNode } from "lexical"; import { $createStyledElementNode } from "./nodes/StyledElementNode"; import { clearChunks } from "../../../DB/indexDB";
+import { useEffect, useState, useRef } from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $createTextNode, $getRoot, $createParagraphNode } from "lexical";
+import { $createStyledElementNode } from "./nodes/StyledElementNode";
+import { clearChunks } from "../../../DB/indexDB";
 
 const CHUNK_SIZE = 30;
+const CHUNK_HEIGHT = 1000; // Estimated height per chunk
 
-function HtmlFileUploader({ scrollContainerRef }) { const [editor] = useLexicalComposerContext(); const [allChunks, setAllChunks] = useState([]); const [centerChunkIndex, setCenterChunkIndex] = useState(2); const [loadedChunkRange, setLoadedChunkRange] = useState({ start: 0, end: 4 });
+function HtmlFileUploader({ scrollContainerRef }) {
+  const [editor] = useLexicalComposerContext();
+  const [allChunks, setAllChunks] = useState([]);
+  const [centerChunkIndex, setCenterChunkIndex] = useState(2);
+  const [visibleChunkIndices, setVisibleChunkIndices] = useState([]);
+  const [loadedChunkRange, setLoadedChunkRange] = useState({ start: 0, end: 4 }); // Keep track of what's currently loaded
 
-const lastScrollTopRef = useRef(0);
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-const handleFileChange = (event) => { const file = event.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const htmlString = e.target.result;
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, "text/html");
+      const body = doc.body;
+      const elements = Array.from(body.childNodes);
 
-const reader = new FileReader();
-reader.onload = async (e) => {
-  const htmlString = e.target.result;
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(htmlString, "text/html");
-  const body = doc.body;
-  const elements = Array.from(body.childNodes);
+      console.log("📄 Total elements found:", elements.length);
 
-  const chunked = [];
-  for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
-    chunked.push(elements.slice(i, i + CHUNK_SIZE));
-  }
+      const chunked = [];
+      for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
+        chunked.push(elements.slice(i, i + CHUNK_SIZE));
+      }
 
-  await clearChunks();
-  setAllChunks(chunked);
-  setCenterChunkIndex(2);
-  setLoadedChunkRange({ start: 0, end: 4 });
-};
+      console.log("📦 Total chunks created:", chunked.length);
+      await clearChunks();
+      setAllChunks(chunked);
+      setCenterChunkIndex(2);
+      setLoadedChunkRange({ start: 0, end: 4 });
+    };
 
-reader.readAsText(file);
+    reader.readAsText(file);
+  };
 
-};
+  const insertNodeFromDOM = (child, parentLexicalNode, chunkIndex, lineInChunk) => {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const text = child.textContent.trim();
+      if (text) {
+        const paragraph = $createParagraphNode();
+        paragraph.append($createTextNode(text));
+        parentLexicalNode.append(paragraph);
+      }
+      return;
+    }
 
-const insertNodeFromDOM = (child, parentLexicalNode) => { if (child.nodeType === Node.TEXT_NODE) { const text = child.textContent.trim(); if (text) { const paragraph = $createParagraphNode(); paragraph.append($createTextNode(text)); parentLexicalNode.append(paragraph); } return; }
+    if (child.nodeType !== Node.ELEMENT_NODE) return;
 
-if (child.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = child.tagName.toLowerCase();
+    const style = child.getAttribute("style") || "";
+    const lexicalNode = $createStyledElementNode(style, tag);
 
-const tag = child.tagName.toLowerCase();
-const style = child.getAttribute("style") || "";
-const lexicalNode = $createStyledElementNode(style, tag);
+    if (lexicalNode) {
+      parentLexicalNode.append(lexicalNode);
+      Array.from(child.childNodes).forEach((nested, i) =>
+        insertNodeFromDOM(nested, lexicalNode, chunkIndex, lineInChunk)
+      );
+    }
+  };
 
-if (lexicalNode) {
-  parentLexicalNode.append(lexicalNode);
-  Array.from(child.childNodes).forEach((nested) =>
-    insertNodeFromDOM(nested, lexicalNode)
+  const getRequiredChunkRange = (centerIndex) => {
+    const start = Math.max(0, centerIndex - 2);
+    const end = Math.min(allChunks.length - 1, centerIndex + 2);
+    return { start, end };
+  };
+
+  const shouldUpdateChunks = (centerIndex, currentRange) => {
+    const required = getRequiredChunkRange(centerIndex);
+    return required.start !== currentRange.start || required.end !== currentRange.end;
+  };
+
+  const loadChunksWindow = async (centerIndex) => {
+    const container = scrollContainerRef.current;
+    
+    // Capture the current scroll position as percentage (only if container exists and has content)
+    let scrollRatio = 0;
+    if (container && container.scrollHeight > container.clientHeight) {
+      const scrollTop = container.scrollTop;
+      const scrollHeight = container.scrollHeight;
+      const clientHeight = container.clientHeight;
+      scrollRatio = scrollTop / (scrollHeight - clientHeight);
+    }
+    
+    console.log("📍 Before update - ScrollRatio:", scrollRatio.toFixed(3));
+
+    const newRange = getRequiredChunkRange(centerIndex);
+    const indicesToLoad = [];
+    for (let i = newRange.start; i <= newRange.end; i++) {
+      indicesToLoad.push(i);
+    }
+
+    console.log("🧠 Center Chunk:", centerIndex);
+    console.log("📦 Chunks to load:", indicesToLoad);
+
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+
+      indicesToLoad.forEach((index) => {
+        const chunk = allChunks[index];
+        if (!chunk) return;
+
+        // Add chunk divider
+        // const divider = $createParagraphNode();
+        // divider.append($createTextNode(`--- Chunk ${index + 1} ---`));
+        // root.append(divider);
+
+        // Add chunk content
+        chunk.forEach((child, lineInChunk) => {
+          try {
+            insertNodeFromDOM(child, root, index, lineInChunk);
+          } catch (err) {
+            console.error(`❌ Error inserting node ${lineInChunk} from chunk ${index}:`, err);
+          }
+        });
+      });
+
+      console.log("✅ Editor updated with chunks:", indicesToLoad);
+    });
+
+    // Update state after successful editor update
+    setVisibleChunkIndices(indicesToLoad);
+    setLoadedChunkRange(newRange);
+
+    // Restore scroll position after DOM update using the same scroll ratio
+    if (container && scrollRatio > 0) {
+      setTimeout(() => {
+        const newScrollHeight = container.scrollHeight;
+        const newClientHeight = container.clientHeight;
+        
+        if (newScrollHeight > newClientHeight) {
+          const targetScrollTop = scrollRatio * (newScrollHeight - newClientHeight);
+          container.scrollTop = targetScrollTop;
+          
+          console.log("📍 Scroll restored to ratio:", scrollRatio.toFixed(3));
+        }
+      }, 100); // Increased timeout to ensure DOM is ready
+    }
+  };
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container || allChunks.length === 0) return;
+
+    let { scrollTop, scrollHeight, clientHeight } = container;
+    let scrollRatio = scrollTop / (scrollHeight - clientHeight);
+    console.log("🌀 Scroll ratio:", scrollRatio.toFixed(2));
+    console.log('scrollTop', scrollTop)
+
+    let newCenterIndex = centerChunkIndex;
+
+    // Move forward when scrolling down past 60%
+    if (scrollRatio > 0.6 && centerChunkIndex < allChunks.length - 3) {
+      
+      newCenterIndex = centerChunkIndex + 1;
+      console.log('newCenterIndex', newCenterIndex)
+      console.log("➡ Moving to next chunk:", newCenterIndex);
+      
+    } 
+    // Move backward when scrolling up past 40%
+    else if (scrollRatio < 0.4 && centerChunkIndex > 2) {
+      newCenterIndex = centerChunkIndex - 1;
+      console.log("⬅ Moving to previous chunk:", newCenterIndex);
+      
+    }
+
+    // Only update if we need to change chunks AND the required range is different
+    if (newCenterIndex !== centerChunkIndex && shouldUpdateChunks(newCenterIndex, loadedChunkRange)) {
+      setCenterChunkIndex(newCenterIndex);
+    }
+  };
+
+  const debounce = (func, delay) => {
+    let timeout;
+    return (...args) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), delay);
+    };
+  };
+
+  // Load chunks when center index changes OR when initially loading
+  useEffect(() => {
+    if (allChunks.length > 0) {
+      console.log("🔄 Effect triggered - centerChunkIndex:", centerChunkIndex, "allChunks.length:", allChunks.length);
+      loadChunksWindow(centerChunkIndex);
+    }
+  }, [centerChunkIndex, allChunks]);
+
+  // Set up scroll listener
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      const debouncedScroll = debounce(handleScroll, 200);
+      container.addEventListener("scroll", debouncedScroll, { passive: true });
+
+      return () => {
+        container.removeEventListener("scroll", debouncedScroll);
+      };
+    }
+  }, [centerChunkIndex, allChunks, loadedChunkRange]);
+
+  // Calculate spacer heights for virtual scrolling effect
+  const topSpacerHeight =  CHUNK_HEIGHT * loadedChunkRange.start
+  const bottomSpacerHeight = CHUNK_HEIGHT * Math.max(0, allChunks.length - loadedChunkRange.end - 1);
+
+  return (
+    <div className="p-2">
+      <input type="file" accept=".html" onChange={handleFileChange} />
+      {allChunks.length > 0 && (
+        <div className="mt-2">
+          <p className="text-sm text-green-600">
+            📦 Showing chunks {visibleChunkIndices.map((i) => i + 1).join(", ")} of {allChunks.length}
+          </p>
+          <p className="text-xs text-blue-500">
+            🎯 Center: Chunk {centerChunkIndex + 1} | Range: {loadedChunkRange.start + 1}-{loadedChunkRange.end + 1}
+          </p>
+          <p className="text-xs text-gray-500">
+            🔄 Dynamic sliding: Always 5 chunks, auto-adds/removes as you scroll
+          </p>
+          <div className="mt-2 space-x-2">
+            <button
+              onClick={() => setCenterChunkIndex(Math.max(2, centerChunkIndex - 1))}
+              className="px-2 py-1 text-xs bg-gray-500 text-white rounded"
+              disabled={centerChunkIndex <= 2}
+            >
+              ← Prev
+            </button>
+            <button
+              onClick={() => setCenterChunkIndex(Math.min(allChunks.length - 3, centerChunkIndex + 1))}
+              className="px-2 py-1 text-xs bg-gray-500 text-white rounded"
+              disabled={centerChunkIndex >= allChunks.length - 3}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+      {/* <div style={{ height: `${topSpacerHeight}px` }} />
+      {/* Lexical editor renders here */}
+      {/* <div style={{ height: `${bottomSpacerHeight}px` }} /> */} 
+    </div>
   );
 }
 
-};
-
-const getRequiredChunkRange = (centerIndex) => { const start = Math.max(0, centerIndex - 2); const end = Math.min(allChunks.length - 1, centerIndex + 2); return { start, end }; };
-
-const loadChunksWindow = async (centerIndex) => { const newRange = getRequiredChunkRange(centerIndex); const indicesToLoad = []; for (let i = newRange.start; i <= newRange.end; i++) { indicesToLoad.push(i); }
-
-editor.update(() => {
-  const root = $getRoot();
-  root.clear();
-
-  indicesToLoad.forEach((index) => {
-    const chunk = allChunks[index];
-    if (!chunk) return;
-
-    const wrapper = $createParagraphNode();
-    wrapper.setFormat("left");
-    wrapper.setIndent(0);
-    wrapper.setDirection("ltr");
-    wrapper.setTextAlignment("left");
-
-    wrapper.append($createTextNode(`--- Chunk ${index + 1} ---`));
-    root.append(wrapper);
-
-    chunk.forEach((child) => {
-      try {
-        insertNodeFromDOM(child, root);
-      } catch (err) {
-        console.error(`Error inserting node from chunk ${index}:`, err);
-      }
-    });
-  });
-});
-
-setLoadedChunkRange(newRange);
-
-};
-
-const handleScroll = () => { const container = scrollContainerRef.current; if (!container || allChunks.length === 0) return;
-
-const scrollTop = container.scrollTop;
-const scrollDirection = scrollTop > lastScrollTopRef.current ? "down" : "up";
-lastScrollTopRef.current = scrollTop;
-
-const chunkElements = container.querySelectorAll("[data-chunk-index]");
-chunkElements.forEach((el) => {
-  const rect = el.getBoundingClientRect();
-  const index = parseInt(el.getAttribute("data-chunk-index"));
-
-  if (scrollDirection === "down" && rect.top < container.clientHeight && index > centerChunkIndex) {
-    setCenterChunkIndex(index);
-  }
-
-  if (scrollDirection === "up" && rect.top > 0 && rect.top < 200 && index < centerChunkIndex) {
-    setCenterChunkIndex(index);
-  }
-});
-
-};
-
-useEffect(() => { if (allChunks.length > 0) { loadChunksWindow(centerChunkIndex); } }, [centerChunkIndex, allChunks]);
-
-useEffect(() => { const container = scrollContainerRef.current; if (!container) return;
-
-const onScroll = () => handleScroll();
-container.addEventListener("scroll", onScroll, { passive: true });
-return () => container.removeEventListener("scroll", onScroll);
-
-}, [centerChunkIndex, allChunks]);
-
-return ( <div className="p-2"> <input type="file" accept=".html" onChange={handleFileChange} /> </div> ); }
-
 export default HtmlFileUploader;
-
