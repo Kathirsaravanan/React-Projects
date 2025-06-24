@@ -11,7 +11,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
   const [allChunks, setAllChunks] = useState([]);
   const [visibleChunks, setVisibleChunks] = useState(new Set());
   const centerMarkerRef = useRef(null);
-  const lastFocusedIdRef = useRef(null);
+  const anchorElementRef = useRef(null);
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -68,26 +68,28 @@ function HtmlFileUploader({ scrollContainerRef }) {
     for (const el of elements) {
       const rect = el.getBoundingClientRect();
       if (rect.top <= centerY && rect.bottom >= centerY) {
-        const id = `focus-${Date.now()}`;
-        el.setAttribute("data-focus-id", id);
-        lastFocusedIdRef.current = id;
-        return id;
+        anchorElementRef.current = el;
+        console.log("Captured element near center for scroll retention:", el);
+        return el;
       }
     }
+    console.log("No element found near center for retention");
     return null;
   };
 
-  const scrollToElementById = (id) => {
-    if (!id) return;
-    const container = scrollContainerRef.current;
-    const el = container.querySelector(`[data-focus-id="${id}"]`);
-    if (el) {
-      const containerRect = container.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      const offset = elRect.top - containerRect.top - container.clientHeight / 2 + el.clientHeight / 2;
-      container.scrollTop += offset;
-      console.log("Scroll position restored to element with ID:", id);
+  const scrollElementToSameViewportPosition = (el) => {
+    if (!el || !scrollContainerRef.current) {
+      console.log("No anchor element or scroll container to restore position");
+      return;
     }
+
+    const container = scrollContainerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+
+    const offset = elRect.top - containerRect.top - container.clientHeight / 2 + el.clientHeight / 2;
+    container.scrollTop += offset;
+    console.log("Scroll position adjusted to keep anchor element centered:", el);
   };
 
   const appendChunkToEditor = (index) => {
@@ -126,8 +128,10 @@ function HtmlFileUploader({ scrollContainerRef }) {
   useEffect(() => {
     if (allChunks.length === 0 || visibleChunks.size === 0) return;
 
-    const focusedId = findElementAtCenter();
+    const anchorElement = findElementAtCenter();
     const currentChunks = Array.from(visibleChunks);
+
+    console.log("Re-rendering visible chunks:", currentChunks);
 
     editor.update(() => {
       const root = $getRoot();
@@ -138,7 +142,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
     });
 
     setTimeout(() => {
-      scrollToElementById(focusedId);
+      scrollElementToSameViewportPosition(anchorElementRef.current);
     }, 100);
   }, [visibleChunks]);
 
@@ -164,6 +168,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
           if (index === Math.max(...visibleChunks) - 1 && index + 1 < allChunks.length) {
             newChunks.delete(Math.min(...visibleChunks));
             newChunks.add(index + 2);
+            console.log("Loading next chunk, updated visibleChunks:", Array.from(newChunks));
             setVisibleChunks(newChunks);
           }
 
@@ -171,6 +176,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
           if (index === Math.min(...visibleChunks) + 1 && index - 1 >= 0) {
             newChunks.delete(Math.max(...visibleChunks));
             newChunks.add(index - 2);
+            console.log("Loading previous chunk, updated visibleChunks:", Array.from(newChunks));
             setVisibleChunks(newChunks);
           }
         }
@@ -182,6 +188,7 @@ function HtmlFileUploader({ scrollContainerRef }) {
       const sentinels = Array.from(container.querySelectorAll("p"))
         .filter(p => p.textContent.includes("chunk"));
       sentinels.forEach((el) => observer.observe(el));
+      console.log("Observing sentinels for chunks:", sentinels.length);
     }, 100);
 
     return () => observer.disconnect();
