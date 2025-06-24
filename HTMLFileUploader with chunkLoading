@@ -1,68 +1,53 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $createTextNode, $getRoot } from "lexical";
+import { $createTextNode, $getRoot, $createParagraphNode } from "lexical";
 import { $createStyledElementNode } from "./nodes/StyledElementNode";
-import {
-  saveChunkToDB,
-  getChunkFromDB,
-  deleteOtherChunks
-} from "./db";
+import { clearChunks } from "../../../DB/indexDB";
 
-const CHUNK_SIZE = 50;
+const CHUNK_SIZE = 30;
 
 function HtmlFileUploader({ scrollContainerRef }) {
   const [editor] = useLexicalComposerContext();
   const [allChunks, setAllChunks] = useState([]);
-  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
-  const [cachedChunks, setCachedChunks] = useState({});
+  const [visibleChunks, setVisibleChunks] = useState(new Set());
+  const centerMarkerRef = useRef(null);
+  const lastFocusedIdRef = useRef(null);
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const htmlString = e.target.result;
       const parser = new DOMParser();
       const doc = parser.parseFromString(htmlString, "text/html");
       const body = doc.body;
       const elements = Array.from(body.childNodes);
-
       const chunked = [];
       for (let i = 0; i < elements.length; i += CHUNK_SIZE) {
         chunked.push(elements.slice(i, i + CHUNK_SIZE));
       }
-
+      await clearChunks();
       setAllChunks(chunked);
-      setCurrentChunkIndex(0);
-      setCachedChunks({});
+      setVisibleChunks(new Set([0, 1, 2, 3, 4]));
+      console.log("Initial chunks loaded: 1 to 5");
     };
-
     reader.readAsText(file);
-  };
-
-  const debounce = (func, delay) => {
-    let timeout;
-    return (...args) => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => func(...args), delay);
-    };
   };
 
   const insertNodeFromDOM = (child, parentLexicalNode) => {
     if (child.nodeType === Node.TEXT_NODE) {
       const text = child.textContent.trim();
       if (text) {
-        parentLexicalNode.append($createTextNode(text));
+        const paragraph = $createParagraphNode();
+        paragraph.append($createTextNode(text));
+        parentLexicalNode.append(paragraph);
       }
       return;
     }
-
     if (child.nodeType !== Node.ELEMENT_NODE) return;
-
     const tag = child.tagName.toLowerCase();
     const style = child.getAttribute("style") || "";
-
     const lexicalNode = $createStyledElementNode(style, tag);
     if (lexicalNode) {
       parentLexicalNode.append(lexicalNode);
@@ -72,107 +57,151 @@ function HtmlFileUploader({ scrollContainerRef }) {
     }
   };
 
-  const saveChunk = async (index) => {
-    editor.update(() => {
-      const editorState = editor.getEditorState();
-      const json = editorState.toJSON();
-      saveChunkToDB(index, json);
-      setCachedChunks((prev) => ({
-        ...prev,
-        [index]: json,
-      }));
-    });
-  };
+  const findElementAtCenter = () => {
+    const marker = centerMarkerRef.current;
+    if (!marker) return null;
 
-  const restoreChunk = async (index) => {
-    const saved = cachedChunks[index] || await getChunkFromDB(index);
-    if (saved) {
-      const parsedState = editor.parseEditorState(saved);
-      editor.setEditorState(parsedState);
-    } else {
-      const chunk = allChunks[index];
-      editor.update(() => {
-        const root = $getRoot();
-        root.clear();
-        chunk.forEach((child) => insertNodeFromDOM(child, root));
-      });
-    }
-  };
+    const markerRect = marker.getBoundingClientRect();
+    const centerY = markerRect.top + markerRect.height / 2;
 
-  const maintainCacheWindow = async (centerIndex) => {
-    const keep = [centerIndex - 1, centerIndex, centerIndex + 1].filter(
-      (i) => i >= 0 && i < allChunks.length
-    );
-
-    await deleteOtherChunks(keep);
-  };
-
-  const switchChunk = async (newIndex) => {
-    if (newIndex < 0 || newIndex >= allChunks.length) return;
-
-    await saveChunk(currentChunkIndex);
-    setCurrentChunkIndex(newIndex);
-  };
-
-  const loadChunk = async (index) => {
-    if (!allChunks.length || index < 0 || index >= allChunks.length) return;
-
-    await restoreChunk(index);
-
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = 0;
-    }
-
-    [index - 1, index + 1].forEach(async (i) => {
-      if (i >= 0 && i < allChunks.length && !cachedChunks[i]) {
-        const saved = await getChunkFromDB(i);
-        if (saved) {
-          setCachedChunks((prev) => ({
-            ...prev,
-            [i]: saved,
-          }));
-        }
+    const elements = Array.from(document.querySelectorAll("p"));
+    for (const el of elements) {
+      const rect = el.getBoundingClientRect();
+      if (rect.top <= centerY && rect.bottom >= centerY) {
+        const id = `focus-${Date.now()}`;
+        el.setAttribute("data-focus-id", id);
+        lastFocusedIdRef.current = id;
+        return id;
       }
-    });
+    }
+    return null;
+  };
 
-    await maintainCacheWindow(index);
+  const scrollToElementById = (id) => {
+    if (!id) return;
+    const container = scrollContainerRef.current;
+    const el = container.querySelector(`[data-focus-id="${id}"]`);
+    if (el) {
+      const containerRect = container.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const offset = elRect.top - containerRect.top - container.clientHeight / 2 + el.clientHeight / 2;
+      container.scrollTop += offset;
+      console.log("Scroll position restored to element with ID:", id);
+    }
+  };
+
+  const appendChunkToEditor = (index) => {
+    if (!allChunks[index]) return;
+    editor.update(() => {
+      const root = $getRoot();
+
+      const sentinel = $createParagraphNode();
+      sentinel.append($createTextNode(`chunk${index + 1}`));
+      root.append(sentinel);
+
+      allChunks[index].forEach((child) => {
+        try {
+          insertNodeFromDOM(child, root);
+        } catch (err) {
+          console.error(`Error inserting node from chunk ${index}:`, err);
+        }
+      });
+    });
+    console.log(`Appended chunk ${index + 1}`);
+  };
+
+  const removeChunkFromEditor = (index) => {
+    editor.update(() => {
+      const root = $getRoot();
+      const children = root.getChildren();
+      children.forEach((node) => {
+        if (node.getTextContent().includes(`chunk${index + 1}`)) {
+          node.remove();
+        }
+      });
+    });
+    console.log(`Removed chunk ${index + 1}`);
   };
 
   useEffect(() => {
-    loadChunk(currentChunkIndex);
-  }, [currentChunkIndex, allChunks]);
+    if (allChunks.length === 0 || visibleChunks.size === 0) return;
 
-  const handleScroll = () => {
+    const focusedId = findElementAtCenter();
+    const currentChunks = Array.from(visibleChunks);
+
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      currentChunks.forEach((index) => {
+        appendChunkToEditor(index);
+      });
+    });
+
+    setTimeout(() => {
+      scrollToElementById(focusedId);
+    }, 100);
+  }, [visibleChunks]);
+
+  useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const text = entry.target.textContent;
+          if (!text || !entry.isIntersecting) continue;
 
-    if (distanceFromBottom <= 10 && currentChunkIndex < allChunks.length - 1) {
-      switchChunk(currentChunkIndex + 1);
-    } else if (scrollTop <= 10 && currentChunkIndex > 0) {
-      switchChunk(currentChunkIndex - 1);
-    }
-  };
+          const match = text.match(/chunk(\d+)/);
+          if (!match) continue;
 
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      const debouncedScroll = debounce(handleScroll, 100);
-      container.addEventListener("scroll", debouncedScroll);
-      return () => container.removeEventListener("scroll", debouncedScroll);
-    }
-  }, [scrollContainerRef, currentChunkIndex, allChunks]);
+          const index = parseInt(match[1], 10) - 1;
+          console.log("Intersecting chunk:", index + 1);
+
+          const newChunks = new Set(visibleChunks);
+
+          // Forward scroll
+          if (index === Math.max(...visibleChunks) - 1 && index + 1 < allChunks.length) {
+            newChunks.delete(Math.min(...visibleChunks));
+            newChunks.add(index + 2);
+            setVisibleChunks(newChunks);
+          }
+
+          // Backward scroll
+          if (index === Math.min(...visibleChunks) + 1 && index - 1 >= 0) {
+            newChunks.delete(Math.max(...visibleChunks));
+            newChunks.add(index - 2);
+            setVisibleChunks(newChunks);
+          }
+        }
+      },
+      { root: container, threshold: 1.0 }
+    );
+
+    setTimeout(() => {
+      const sentinels = Array.from(container.querySelectorAll("p"))
+        .filter(p => p.textContent.includes("chunk"));
+      sentinels.forEach((el) => observer.observe(el));
+    }, 100);
+
+    return () => observer.disconnect();
+  }, [visibleChunks]);
 
   return (
     <div className="p-2">
       <input type="file" accept=".html" onChange={handleFileChange} />
-      {allChunks.length > 0 && (
-        <p className="text-sm text-green-600 mt-2">
-          📦 Showing chunk {currentChunkIndex + 1} of {allChunks.length}
-        </p>
-      )}
+      <div
+        ref={centerMarkerRef}
+        style={{
+          position: "absolute",
+          top: "50%",
+          left: 0,
+          width: "100%",
+          height: "1px",
+          pointerEvents: "none",
+          zIndex: -1,
+        }}
+      />
     </div>
   );
 }
